@@ -49,6 +49,9 @@ var (
 	totalDownloadedLock sync.RWMutex
 	sessionStartTime    int64
 	sessionStartLock    sync.RWMutex
+
+	asyncDownloadQueue chan func()
+	asyncWorkerOnce    sync.Once
 )
 
 type ProgressInfo struct {
@@ -415,5 +418,28 @@ func ResetSessionIfComplete() {
 		totalDownloadedLock.Lock()
 		totalDownloaded = 0
 		totalDownloadedLock.Unlock()
+	}
+}
+
+func StartAsyncDownloadWorker() {
+	asyncWorkerOnce.Do(func() {
+		asyncDownloadQueue = make(chan func(), 100)
+		go func() {
+			for task := range asyncDownloadQueue {
+				if task != nil {
+					task()
+				}
+			}
+		}()
+	})
+}
+
+func QueueAsyncDownload(task func()) error {
+	StartAsyncDownloadWorker()
+	select {
+	case asyncDownloadQueue <- task:
+		return nil
+	default:
+		return fmt.Errorf("download queue is full (capacity: 100)")
 	}
 }

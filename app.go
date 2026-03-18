@@ -43,6 +43,8 @@ func (a *App) getFirstArtist(artistString string) string {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
+	backend.StartAsyncDownloadWorker()
+
 	if err := backend.InitHistoryDB("SpotiFLAC"); err != nil {
 		fmt.Printf("Failed to init history DB: %v\n", err)
 	}
@@ -222,6 +224,58 @@ func (a *App) SearchSpotifyByType(req SpotifySearchByTypeRequest) ([]backend.Sea
 }
 
 func (a *App) DownloadTrack(req DownloadRequest) (DownloadResponse, error) {
+	if req.Service == "" {
+		req.Service = "tidal"
+	}
+
+	if req.Service == "qobuz" && req.SpotifyID == "" {
+		return DownloadResponse{
+			Success: false,
+			Error:   "Spotify ID is required for Qobuz",
+		}, fmt.Errorf("spotify ID is required for Qobuz")
+	}
+
+	switch req.Service {
+	case "tidal", "amazon", "qobuz":
+	default:
+		return DownloadResponse{
+			Success: false,
+			Error:   fmt.Sprintf("Unknown service: %s", req.Service),
+		}, fmt.Errorf("unknown service: %s", req.Service)
+	}
+
+	itemID := req.ItemID
+	if itemID == "" {
+		if req.SpotifyID != "" {
+			itemID = fmt.Sprintf("%s-%d", req.SpotifyID, time.Now().UnixNano())
+		} else {
+			itemID = fmt.Sprintf("%s-%s-%d", req.TrackName, req.ArtistName, time.Now().UnixNano())
+		}
+		backend.AddToQueue(itemID, req.TrackName, req.ArtistName, req.AlbumName, req.SpotifyID)
+	}
+
+	req.ItemID = itemID
+	if err := backend.QueueAsyncDownload(func() {
+		if _, err := a.downloadTrackSync(req); err != nil {
+			fmt.Printf("Async download failed for item %s: %v\n", itemID, err)
+		}
+	}); err != nil {
+		backend.FailDownloadItem(itemID, err.Error())
+		return DownloadResponse{
+			Success: false,
+			Error:   err.Error(),
+			ItemID:  itemID,
+		}, err
+	}
+
+	return DownloadResponse{
+		Success: true,
+		Message: "Download queued",
+		ItemID:  itemID,
+	}, nil
+}
+
+func (a *App) downloadTrackSync(req DownloadRequest) (DownloadResponse, error) {
 
 	if req.Service == "qobuz" && req.SpotifyID == "" {
 		return DownloadResponse{
