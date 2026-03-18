@@ -440,6 +440,6 @@ func QueueAsyncDownload(task func()) error {
 	case asyncDownloadQueue <- task:
 		return nil
 	default:
-		return fmt.Errorf("download queue is full")
+		return fmt.Errorf("download queue is full (capacity: 100)")
 	}
 }
